@@ -2,84 +2,98 @@
 #define TEAMS_HPP
 
 #include <thread>
-#include <cassert>
+#include <assert.h>
 
 #include "lib/rtimers/cxx11.hpp"
 #include "lib/pool/cxxpool.h"
 
 #include "contest.hpp"
 #include "collatz.hpp"
-//#include "my_collatz.hpp"
 #include "sharedresults.hpp"
 
-class Team {
+class Team
+{
 public:
-    explicit Team(uint32_t sizeArg): size(sizeArg) {
+    Team(uint32_t sizeArg, bool shareResults): size(sizeArg), sharedResults()
+    {
         assert(this->size > 0);
+
+        if (shareResults)
+        {
+            this->sharedResults.reset(new SharedResults{});
+        }
     }
-    virtual ~Team() = default;
+    virtual ~Team() {}
 
     virtual std::string getInnerName() = 0;
-    std::shared_ptr<SharedResults> getSharedResults() { return sharedResults; };
+
+    std::shared_ptr<SharedResults> getSharedResults()
+    {
+        return this->sharedResults;
+    }
+
     virtual ContestResult runContest(ContestInput const & contest) = 0;
     std::string getXname() { return this->getSharedResults() ? "X" : ""; }
     virtual std::string getTeamName() { return this->getInnerName() + this->getXname() + "<" + std::to_string(this->size) + ">"; }
-    [[nodiscard]] uint32_t getSize() const { return this->size; }
+    uint32_t getSize() const { return this->size; }
+
 
 private:
-    uint32_t size;
-protected:
     std::shared_ptr<SharedResults> sharedResults;
+    uint32_t size;
 };
 
-class TeamSolo : public Team {
+class TeamSolo : public Team
+{
 public:
-    explicit TeamSolo(uint32_t sizeArg): Team(1) {} // ignore size, don't share
+    TeamSolo(uint32_t sizeArg): Team(1, false) {} // ignore size, don't share
 
-    ContestResult runContest(ContestInput const & contestInput) override {
+    virtual ContestResult runContest(ContestInput const & contestInput)
+    {
         ContestResult result;
         result.resize(contestInput.size());
         uint64_t idx = 0;
 
         rtimers::cxx11::DefaultTimer soloTimer("CalcCollatzSoloTimer");
 
-        for (InfInt const & singleInput : contestInput) {
+        for(InfInt const & singleInput : contestInput)
+        {
             auto scopedStartStop = soloTimer.scopedStart();
             result[idx] = calcCollatz(singleInput);
-            idx++;
+            ++idx;
         }
         return result;
     }
 
-    std::string getInnerName() override { return "TeamSolo"; }
+    virtual std::string getInnerName() { return "TeamSolo"; }
 };
 
-class TeamThreads : public Team {
+class TeamThreads : public Team
+{
 public:
-    TeamThreads(uint32_t sizeArg, bool shareResults): Team(sizeArg), createdThreads(0){
-        if (shareResults) {
-            this->sharedResults.reset(new SharedThreadResults());
-        }
-    }
-    
+    TeamThreads(uint32_t sizeArg, bool shareResults): Team(sizeArg, shareResults), createdThreads(0) {}
+
     template< class Function, class... Args >
-    std::thread createThread(Function&& f, Args&&... args) {
+    std::thread createThread(Function&& f, Args&&... args)
+    {
         ++this->createdThreads;
         return std::thread(std::forward<Function>(f), std::forward<Args>(args)...);
     }
 
-    void resetThreads() { this->createdThreads = 0; } 
-    [[nodiscard]] uint64_t getCreatedThreads() const { return this->createdThreads; }
+    void resetThreads() { this->createdThreads = 0; }
+    uint64_t getCreatedThreads() { return this->createdThreads; }
 
 private:
     uint64_t createdThreads;
 };
 
-class TeamNewThreads : public TeamThreads {
+class TeamNewThreads : public TeamThreads
+{
 public:
     TeamNewThreads(uint32_t sizeArg, bool shareResults): TeamThreads(sizeArg, shareResults) {}
 
-    ContestResult runContest(ContestInput const & contestInput) override {
+    virtual ContestResult runContest(ContestInput const & contestInput)
+    {
         this->resetThreads();
         ContestResult result = this->runContestImpl(contestInput);
         assert(contestInput.size() == this->getCreatedThreads());
@@ -88,14 +102,16 @@ public:
 
     virtual ContestResult runContestImpl(ContestInput const & contestInput);
 
-    std::string getInnerName() override { return "TeamNewThreads"; }
+    virtual std::string getInnerName() { return "TeamNewThreads"; }
 };
 
-class TeamConstThreads : public TeamThreads {
+class TeamConstThreads : public TeamThreads
+{
 public:
     TeamConstThreads(uint32_t sizeArg, bool shareResults): TeamThreads(sizeArg, shareResults) {}
 
-    ContestResult runContest(ContestInput const & contestInput) override {
+    virtual ContestResult runContest(ContestInput const & contestInput)
+    {
         this->resetThreads();
         ContestResult result = this->runContestImpl(contestInput);
         assert(this->getSize() == this->getCreatedThreads());
@@ -104,63 +120,49 @@ public:
 
     virtual ContestResult runContestImpl(ContestInput const & contestInput);
 
-    std::string getInnerName() override { return "TeamConstThreads"; }
+    virtual std::string getInnerName() { return "TeamConstThreads"; }
 };
 
-class TeamPool : public Team {
+class TeamPool : public Team
+{
 public:
-    TeamPool(uint32_t sizeArg, bool shareResults): Team(sizeArg), pool(sizeArg) {
-        if (shareResults) {
-            this->sharedResults.reset(new SharedThreadResults());
-        }
-    }
+    TeamPool(uint32_t sizeArg, bool shareResults): Team(sizeArg, shareResults), pool(sizeArg) {}
 
-    ContestResult runContest(ContestInput const & contestInput) override;
+    virtual ContestResult runContest(ContestInput const & contestInput);
 
-    std::string getInnerName() override { return "TeamPool"; }
-
+    virtual std::string getInnerName() { return "TeamPool"; }
 private:
     cxxpool::thread_pool pool;
-    std::shared_ptr<SharedThreadResults> sharedResults;
 };
 
-class TeamNewProcesses : public Team {
+class TeamNewProcesses : public Team
+{
 public:
-    TeamNewProcesses(uint32_t sizeArg, bool shareResults): Team(sizeArg) {
-        if (shareResults) {
-            this->sharedResults.reset(new SharedProcessResults());
-        }
-    }
+    TeamNewProcesses(uint32_t sizeArg, bool shareResults): Team(sizeArg, shareResults) {}
 
-    ContestResult runContest(ContestInput const & contestInput) override;
+    virtual ContestResult runContest(ContestInput const & contestInput);
 
-    std::string getInnerName() override { return "TeamNewProcesses"; }
+    virtual std::string getInnerName() { return "TeamNewProcesses"; }
 };
 
-class TeamConstProcesses : public Team {
+class TeamConstProcesses : public Team
+{
 public:
-    TeamConstProcesses(uint32_t sizeArg, bool shareResults): Team(sizeArg) {
-        if (shareResults) {
-            this->sharedResults.reset(new SharedProcessResults());
-        }
-    }
+    TeamConstProcesses(uint32_t sizeArg, bool shareResults): Team(sizeArg, shareResults) {}
 
-    ContestResult runContest(ContestInput const & contestInput) override;
+    virtual ContestResult runContest(ContestInput const & contestInput);
 
-    std::string getInnerName() override { return "TeamConstProcesses"; }
+    virtual std::string getInnerName() { return "TeamConstProcesses"; }
 };
 
-class TeamAsync : public Team {
+class TeamAsync : public Team
+{
 public:
-    TeamAsync(uint32_t sizeArg, bool shareResults): Team(1) {
-        if (shareResults) {
-            this->sharedResults.reset(new SharedThreadResults());
-        }
-    } // ignore size
+    TeamAsync(uint32_t sizeArg, bool shareResults): Team(1, shareResults) {} // ignore size
 
-    ContestResult runContest(ContestInput const & contestInput) override;
+    virtual ContestResult runContest(ContestInput const & contestInput);
 
-    std::string getInnerName() override { return "TeamAsync"; }
+    virtual std::string getInnerName() { return "TeamAsync"; }
 };
 
 #endif

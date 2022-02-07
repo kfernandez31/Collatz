@@ -4,32 +4,39 @@
 #include <unordered_map>
 #include <shared_mutex>
 #include <functional>
+#include <semaphore.h>
 
 #include "contest.hpp"
 #include "lib/infint/InfInt.h"
 
-#define BUCKET_COUNT 999983 // magic prime number
+#define BUCKET_COUNT (999983 + 1) // magic prime number (+1) just under 10e6
 
 class SharedResults {
 public:
-    SharedResults() : bucketCount(BUCKET_COUNT) {}
+    SharedResults() : map(BUCKET_COUNT, this->hashFun) {}
+    ~SharedResults() = default;
 
-    virtual bool atomicRead(InfInt &n, uint64_t &count) = 0;
-    virtual bool atomicWrite(InfInt &n, uint64_t &count) = 0;
+    bool atomicRead(InfInt &n, uint64_t &count) {
+        std::shared_lock<std::shared_mutex> lock(mtx);
 
-protected:
-    const InfInt bucketCount;
-};
+        auto search = map.find(n);
+        if (search != map.end()) {
+            count = search->second;
+            return true;
+        }
 
-class SharedThreadResults : public SharedResults {
-public:
-    SharedThreadResults() : map(BUCKET_COUNT, this->hashFun) {}
+        return false;
+    }
 
-    bool atomicRead(InfInt &n, uint64_t &count) override;
-    bool atomicWrite(InfInt &n, uint64_t &count) override;
+    bool atomicWrite(InfInt &n, uint64_t &count) {
+        std::unique_lock<std::shared_mutex> lock(mtx);
+        //map[n] = count;
+        map.insert({n, count});
+        return true;
+    }
 
 private:
-    std::shared_timed_mutex mtx;
+    std::shared_mutex mtx;
     std::function<uint64_t(InfInt)> hashFun = [](InfInt x) {
         size_t seed = x.getVal().size();
         for (ELEM_TYPE& i : x.getVal()) {
@@ -40,7 +47,7 @@ private:
     std::unordered_map<InfInt, uint64_t, decltype(hashFun)> map;
 };
 
-class SharedProcessResults : public SharedResults {
+/*class SharedProcessResults : public SharedResults {
 public:
     SharedProcessResults() {
         this->calculated.fill(false);
@@ -49,10 +56,14 @@ public:
     bool atomicRead(InfInt &n, uint64_t &count) override;
     bool atomicWrite(InfInt &n, uint64_t &count) override;
     virtual void initMap(ContestInput const & contestInput);
+    virtual void waitForResults() override;
+    virtual void deliverResults() override;
 
 private:
     std::array<uint64_t, BUCKET_COUNT + 1> map;
+    std::array<uint64_t, BUCKET_COUNT + 1> results; //TODO: to oczywiście ma być inny rozmiar
     std::array<bool, BUCKET_COUNT + 1> calculated;
-};
+    sem_t resWait;
+};*/
 
 #endif

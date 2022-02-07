@@ -11,7 +11,6 @@
 #define INFINT_USE_EXCEPTIONS
 
 int main(int argc, char ** argv) {
-    std::cout << std::numeric_limits<unsigned int>::max() << std::endl;
     rtimers::cxx11::DefaultTimer totalTimer("Total");
     auto totalStartStop = totalTimer.scopedStart();
 
@@ -27,9 +26,9 @@ int main(int argc, char ** argv) {
         for (uint32_t numWorkers : {1,2,3,4,7,10}) {
             //teams.push_back(std::shared_ptr<Team>(new TeamNewThreads{numWorkers, share}));
             //teams.push_back(std::shared_ptr<Team>(new TeamConstThreads{numWorkers, share}));
-            teams.push_back(std::shared_ptr<Team>(new TeamPool{numWorkers, share}));
+            //teams.push_back(std::shared_ptr<Team>(new TeamPool{numWorkers, share}));
             //teams.push_back(std::shared_ptr<Team>(new TeamNewProcesses{numWorkers, share}));
-            //teams.push_back(std::shared_ptr<Team>(new TeamConstProcesses{numWorkers, share}));
+            teams.push_back(std::shared_ptr<Team>(new TeamConstProcesses{numWorkers, share}));
         }
         //teams.push_back(std::shared_ptr<Team>(new TeamAsync{1, share}));
     }

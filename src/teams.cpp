@@ -21,7 +21,6 @@
 ContestResult TeamNewThreads::runContestImpl(ContestInput const & contestInput) {
     ContestResult res;
     res.resize(contestInput.size());
-    //rtimers::cxx11::DefaultTimer soloTimer("CalcCollatzNewThreadsTimer");
 
     std::condition_variable cond;
     std::mutex mtx;
@@ -46,8 +45,8 @@ ContestResult TeamNewThreads::runContestImpl(ContestInput const & contestInput) 
     };
 
     auto work = this->getSharedResults()?
-        std::function<void(size_t)>([&](size_t idx) { regularWork(idx); }) :
-        std::function<void(size_t)>([&](size_t idx) { memoisedWork(idx); });
+        std::function<void(size_t)>([&](size_t idx) { memoisedWork(idx); }) :
+        std::function<void(size_t)>([&](size_t idx) { regularWork(idx); });
 
     while (workIdx < contestInput.size()) {
         std::unique_lock<std::mutex> lock(mtx);
@@ -56,7 +55,7 @@ ContestResult TeamNewThreads::runContestImpl(ContestInput const & contestInput) 
         while (foo()) {
             activeThreads++;
             std::thread t = createThread(work, workIdx);
-            t.detach();
+            t.detach(); //TODO: lepiej join
             workIdx++;
         }
     }
@@ -72,7 +71,6 @@ ContestResult TeamNewThreads::runContestImpl(ContestInput const & contestInput) 
 ContestResult TeamConstThreads::runContestImpl(ContestInput const & contestInput) {
     ContestResult res;
     res.resize(contestInput.size());
-    //rtimers::cxx11::DefaultTimer soloTimer("CalcCollatzConstThreadsTimer");
     std::thread threads[this->getSize()];
 
     auto regularWork = [this, &res, &contestInput](size_t i) {
@@ -86,8 +84,8 @@ ContestResult TeamConstThreads::runContestImpl(ContestInput const & contestInput
     };
 
     auto work = this->getSharedResults()?
-        std::function<void(size_t)>([&](size_t idx) { regularWork(idx); }) :
-        std::function<void(size_t)>([&](size_t idx) { memoisedWork(idx); });
+                std::function<void(size_t)>([&](size_t idx) { memoisedWork(idx); }) :
+                std::function<void(size_t)>([&](size_t idx) { regularWork(idx); });
 
     for (uint64_t i = 0; i < this->getSize(); i++)
        threads[i] = std::move(createThread(work, i));
@@ -102,12 +100,12 @@ ContestResult TeamConstThreads::runContestImpl(ContestInput const & contestInput
 ContestResult TeamPool::runContest(ContestInput const & contestInput) {
     ContestResult res;
     res.resize(contestInput.size());
-    //rtimers::cxx11::DefaultTimer soloTimer("CalcCollatzTeamPoolTimer");
 
     std::future<uint64_t> futures[contestInput.size()];
     if (this->getSharedResults())
-        for (uint64_t i = 0; i < contestInput.size(); i++)
+        for (uint64_t i = 0; i < contestInput.size(); i++) {
             futures[i] = this->pool.push(t_myCalcCollatz, this->getSharedResults(), contestInput[i]);
+        }
     else
         for (uint64_t i = 0; i < contestInput.size(); i++)
             futures[i] = this->pool.push(calcCollatz, contestInput[i]);
@@ -122,7 +120,6 @@ ContestResult TeamPool::runContest(ContestInput const & contestInput) {
 ContestResult TeamNewProcesses::runContest(ContestInput const & contestInput) {
     ContestResult res;
     res.resize(contestInput.size());
-    //rtimers::cxx11::DefaultTimer soloTimer("CalcCollatzTeamNewProcessesTimer");
 
     return res;
 }
@@ -130,20 +127,18 @@ ContestResult TeamNewProcesses::runContest(ContestInput const & contestInput) {
 ContestResult TeamConstProcesses::runContest(ContestInput const & contestInput) {
     ContestResult res;
     res.resize(contestInput.size());
-    //rtimers::cxx11::DefaultTimer soloTimer("CalcCollatzTeamConstProcessesTimer");
 
     InfInt max_input = *max_element(contestInput.begin(), contestInput.end());
     size_t max_idx = std::min(max_input, InfInt(BUCKET_COUNT)).toUnsignedInt();
 
     void* mapped_mem_all = nullptr;
-    if ((mapped_mem_all = mmap(nullptr, sizeof(sem_t) + sizeof(uint64_t) * (max_idx + 1 + contestInput.size()),
+    if ((mapped_mem_all = mmap(nullptr, sizeof(uint64_t) * (max_idx + 1 + contestInput.size()),
         PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0)
         ) == MAP_FAILED
     ) SYSERR("mmap", -1);
 
-    // semaphore to hang parent, arrays of space `max_idx + 1` and `contestInput.size()` respectively;
-    auto *parentDelay = (sem_t*) mapped_mem_all;
-    auto *preprocessedResults = (uint64_t*) (static_cast<char*>(mapped_mem_all) + sizeof(sem_t));
+    // arrays of space `max_idx + 1` and `contestInput.size()` respectively;
+    auto *preprocessedResults = (uint64_t*) (static_cast<char*>(mapped_mem_all));
     auto *finalResults = (uint64_t*) (static_cast<char*>(mapped_mem_all) + max_idx + 1);
 
     uint64_t idx;
@@ -151,64 +146,59 @@ ContestResult TeamConstProcesses::runContest(ContestInput const & contestInput) 
 
     for (idx = 1; idx <= max_idx; idx++)
         preprocessedResults[idx] = p_myCalcCollatz(preprocessedResults, true, max_input);
+    //TODO: rozłożyć pracę
 
     auto regularWork = [this, &res, &contestInput](size_t i) {
         for (uint64_t j = i; j < contestInput.size(); j += this->getSize())
             res[j] = calcCollatz(contestInput[j]);
     };
-    auto memoisedWork = [this, &res, &contestInput](size_t i) {
+    auto memoisedWork = [this, &res, &contestInput, &preprocessedResults](size_t i) {
         for (uint64_t j = i; j < contestInput.size(); j += this->getSize())
-            res[j] = t_myCalcCollatz(this->getSharedResults(), contestInput[j]);
+            res[j] = p_myCalcCollatz(preprocessedResults, false, contestInput[j]);
     };
     auto work = this->getSharedResults()?
-        std::function<void(size_t)>([&](size_t i) { regularWork(i); }) :
-        std::function<void(size_t)>([&](size_t i) { memoisedWork(i); });
-
-    if (sem_init(parentDelay, 1, 0))
-        SYSERR("sem_init", -1);
+                std::function<void(size_t)>([&](size_t i) { memoisedWork(i); }) :
+                std::function<void(size_t)>([&](size_t i) { regularWork(i); });
 
     for (idx = 0; idx < this->getSize(); idx++)
         switch (pid = fork()) {
             case -1: /* error */
                 SYSERR("fork", -1);
             case 0:  /* child */
-                std::cout << "[" << getpid() << "]" << "I've just been spawned" << std::endl;
+                //std::cout << "[" << getpid() << "]" << "I've just been spawned" << std::endl;
                 work(idx);
                 munmap(preprocessedResults, sizeof(uint64_t) * (max_idx + 1));
                 munmap(finalResults, sizeof(uint64_t) * contestInput.size());
-                if (idx == this->getSize())
-                    sem_post(parentDelay); // last child to finish
                 exit(EXIT_SUCCESS);
             default: /* parent */
-                std::cout << "[" << getpid() << "]" << "spawned child " << pid << std::endl;
-                if (idx == 0)
-                    sem_wait(parentDelay); // hang parent until children finish
+                //std::cout << "[" << getpid() << "]" << "spawned child " << pid << std::endl;
                 break;
         }
 
     for (idx = 0; idx < this->getSize(); idx++) {
-        std::cout << "waiting for my child..." << std::endl;
+        //std::cout << "waiting for my child..." << std::endl;
         if (wait(nullptr) == -1)
             SYSERR("wait", -1);
     }
-    sem_destroy(parentDelay);
-    munmap(mapped_mem_all, sizeof(sem_t) + sizeof(uint64_t) * (max_idx + 1 + contestInput.size()));
 
+    for (uint64_t i = 0; i < contestInput.size(); i++)
+        res[i] = finalResults[i];
+
+    munmap(mapped_mem_all, sizeof(uint64_t) * (max_idx + 1 + contestInput.size()));
     return res;
 }
 
 ContestResult TeamAsync::runContest(ContestInput const & contestInput) {
     ContestResult res;
     res.resize(contestInput.size());
-    //rtimers::cxx11::DefaultTimer soloTimer("CalcCollatzTeamAsyncTimer");
     std::future<uint64_t> futures[contestInput.size()];
 
     if (!this->getSharedResults())
         for (uint64_t i = 0; i < contestInput.size(); i++)
-            futures[i] = std::async(std::launch::async, calcCollatz, contestInput[i]);
+            futures[i] = std::async(calcCollatz, contestInput[i]);
     else
         for (uint64_t i = 0; i < contestInput.size(); i++)
-            futures[i] = std::async(std::launch::async, [&contestInput, this, i](){
+            futures[i] = std::async([&contestInput, this, i](){
                 return t_myCalcCollatz(this->getSharedResults(), contestInput[i]);
             });
 
